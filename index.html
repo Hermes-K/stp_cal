@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L2 STP & VLAN 작업 위험도 예측 시뮬레이터</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Pretendard:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+            <line x1="6" y1="6" x2="6.01" y2="6"></line>
+            <line x1="6" y1="18" x2="6.01" y2="18"></line>
+            <path d="M18 10v4"></path>
+            <circle cx="18" cy="12" r="2"></circle>
+          </svg>
+        </div>
+        <div>
+          <h1>L2 STP / VLAN 변경 작업 위험도 예측 계산기</h1>
+          <p class="subtitle">Switch Port BLK 해제 · VLAN 추가/변경 작업에 따른 L2 루프 및 STP 수렴 장애 위험 분석</p>
+        </div>
+      </div>
+      <div class="header-badges">
+        <span class="badge badge-pulse"><span class="pulse-dot"></span>클라이언트 로컬 연산 전용</span>
+        <span class="badge">Engine v1.0</span>
+      </div>
+    </header>
+
+    <!-- Main Content Layout -->
+    <main class="main-layout">
+      <!-- Input Configuration Panel -->
+      <section class="panel config-panel">
+        <div class="panel-header">
+          <h2>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 20h9"></path>
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+            </svg>
+            작업 및 인프라 파라미터 입력
+          </h2>
+          <div class="quick-presets">
+            <span class="preset-label">프리셋:</span>
+            <button type="button" class="btn-preset" data-preset="trunk-vlan">트렁크 VLAN 추가</button>
+            <button type="button" class="btn-preset" data-preset="blk-action">BLK 포트 작업</button>
+            <button type="button" class="btn-preset" data-preset="high-risk">고위험 루프 환경</button>
+          </div>
+        </div>
+
+        <form id="calc-form" class="form-grid">
+          <!-- 작업 분류 및 대상 포트 -->
+          <div class="form-section">
+            <h3 class="section-title">1. 작업 유형 및 포트 정보</h3>
+            <div class="input-row">
+              <div class="form-group">
+                <label for="workType">수행할 작업 종류</label>
+                <select id="workType" name="workType">
+                  <option value="vlan_add_trunk" selected>트렁크 포트에 신규 VLAN 할당 (vlan add)</option>
+                  <option value="vlan_create_global">스위치 전역 VLAN DB 생성</option>
+                  <option value="vlan_add_access">엑세스 포트 VLAN ID 변경/할당</option>
+                  <option value="blk_up">BLK(대기) 포트 강제 활성화 / Priority 변경</option>
+                  <option value="blk_down">BLK(대기) 포트 Shutdown / 케이블 분리</option>
+                  <option value="blk_type_change">BLK 포트 속성/VLAN 필터 변경</option>
+                  <option value="cable_cross_reconnect">케이블 재포설 / 포트 간 링크 이동</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="portType">대상 포트 동작 모드</label>
+                <select id="portType" name="portType">
+                  <option value="trunk" selected>Trunk Port (802.1Q)</option>
+                  <option value="access">Access Port (단일 단말/서버)</option>
+                  <option value="hybrid">Hybrid / General Port</option>
+                  <option value="portchannel">Port-Channel / LACP 묶음 링크</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="input-row">
+              <div class="form-group">
+                <label for="portStpState">현재 포트의 STP 상태</label>
+                <select id="portStpState" name="portStpState">
+                  <option value="forwarding">Forwarding (FWD) - 정상 트래픽 전송 중</option>
+                  <option value="blocking" selected>Blocking / Alternate / Discarding (BLK)</option>
+                  <option value="disabled">Disabled / Down</option>
+                </select>
+                <span class="field-hint">BLK 포트는 평상시 루프 방지를 위해 차단된 예비 링크입니다.</span>
+              </div>
+
+              <div class="form-group">
+                <label for="vlanInput">작업 대상 VLAN ID (예: 10,20 또는 100-105)</label>
+                <input type="text" id="vlanInput" value="100, 200" placeholder="예: 10, 20, 50-60">
+                <span class="field-hint">여러 개 입력 시 콤마(,) 또는 범위(-) 지원</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- L2 / STP 인프라 구성 (인터랙티브 토폴로지 GUI & Priority/Cost 설정) -->
+          <div class="form-section">
+            <div class="section-title-bar">
+              <h3 class="section-title">2. L2 네트워크 토폴로지 GUI & STP 파라미터 (Priority / Cost)</h3>
+              <span class="gui-hint-badge">💡 스위치를 클릭하여 세부 Priority와 Cost를 수정하세요</span>
+            </div>
+
+            <!-- Interactive Topology Visualizer Canvas/SVG -->
+            <div class="topology-gui-container">
+              <div class="topology-viewport" id="topologyViewport">
+                <svg id="topologySvg" viewBox="0 0 680 340" width="100%" height="100%">
+                  <defs>
+                    <!-- Link Markers and Gradients -->
+                    <filter id="glow-fwd" x="-20%" y="-20%" width="140%" height="140%">
+                      <feGaussianBlur stdDeviation="3" result="blur" />
+                      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                    </filter>
+                    <filter id="glow-blk" x="-20%" y="-20%" width="140%" height="140%">
+                      <feGaussianBlur stdDeviation="3" result="blur" />
+                      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                    </filter>
+                  </defs>
+
+                  <!-- Physical Connections (Links) -->
+                  <g id="topologyLinks"></g>
+
+                  <!-- Switch Nodes -->
+                  <g id="topologyNodes"></g>
+
+                  <!-- Link Labels (Cost & State) -->
+                  <g id="topologyLabels"></g>
+                </svg>
+              </div>
+
+              <!-- Topology Quick Legend -->
+              <div class="topology-legend">
+                <div class="legend-item"><span class="legend-dot dot-root"></span>Root Bridge (최저 Priority)</div>
+                <div class="legend-item"><span class="legend-dot dot-fwd"></span>FWD 포트 (활성 링크)</div>
+                <div class="legend-item"><span class="legend-dot dot-blk"></span>BLK 포트 (STP 차단/대기)</div>
+                <div class="legend-item"><span class="legend-dot dot-target"></span>★ 현재 선택/작업 대상</div>
+              </div>
+            </div>
+
+            <!-- Editor Navigation Tabs (Switch vs Link Interface) -->
+            <div class="editor-tabs-bar">
+              <button type="button" class="editor-tab-btn active" id="tabBtnSwitch">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                  <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                </svg>
+                스위치 장비 설정 (<span id="tabSwitchTitle">SW-DIST1</span>)
+              </button>
+              <button type="button" class="editor-tab-btn" id="tabBtnLink">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="4" y1="12" x2="20" y2="12"></line>
+                  <circle cx="4" cy="12" r="3"></circle>
+                  <circle cx="20" cy="12" r="3"></circle>
+                </svg>
+                연결 인터페이스/링크 설정 (<span id="tabLinkTitle">SW-DIST2 ↔ SW-ACC2</span>)
+              </button>
+            </div>
+
+            <!-- Tab 1: Selected Switch Editor Panel -->
+            <div class="switch-editor-card" id="switchEditorCard">
+              <div class="editor-header">
+                <div class="editor-title-wrap">
+                  <span class="editor-badge" id="editorSwitchTypeBadge">DISTRIBUTION</span>
+                  <h4 id="editorSwitchName">SW-DIST1 (Distribution Switch 1)</h4>
+                </div>
+                <div class="root-indicator" id="editorIsRootIndicator">👑 ROOT BRIDGE</div>
+              </div>
+
+              <div class="editor-body">
+                <div class="input-row">
+                  <div class="form-group">
+                    <label for="editSwitchPriority">Bridge Priority (4096 배수 단위)</label>
+                    <div class="priority-input-wrap">
+                      <select id="editSwitchPriority">
+                        <option value="0">0 (절대 최우선 Root Bridge 강제)</option>
+                        <option value="4096">4096 (Primary Root 권장)</option>
+                        <option value="8192">8192 (Secondary Root 권장)</option>
+                        <option value="16384">16384</option>
+                        <option value="20480">20480</option>
+                        <option value="24576">24576</option>
+                        <option value="28672">28672</option>
+                        <option value="32768" selected>32768 (Cisco 기본 표준값)</option>
+                        <option value="36864">36864</option>
+                        <option value="40960">40960</option>
+                        <option value="61440">61440 (절대 Root 불가 최하위)</option>
+                      </select>
+                    </div>
+                    <span class="field-hint">스위치 중 최저 Priority 장비가 자동으로 Root가 됩니다.</span>
+                  </div>
+
+                  <div class="form-group">
+                    <label for="redundantTopology">토폴로지 구조 형태</label>
+                    <select id="redundantTopology">
+                      <option value="triangle" selected>삼각 이중화 (Dist 2대 - Access 1대)</option>
+                      <option value="ring">환형(Ring) 4대 루프 구조</option>
+                      <option value="mesh">풀 메쉬 (Full Mesh 4대 상호연결)</option>
+                    </select>
+                    <span class="field-hint">토폴로지 변경 시 스위치 연결 다이어그램이 자동 재배치됩니다.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tab 2: Selected Link Interface Editor Panel -->
+            <div class="switch-editor-card" id="linkEditorCard" style="display: none;">
+              <div class="editor-header">
+                <div class="editor-title-wrap">
+                  <span class="editor-badge badge-link" id="editorLinkBadge">LINK: L3</span>
+                  <h4 id="editorLinkEndpoints">SW-DIST2 (Gi0/2) ↔ SW-ACC2 (Gi0/1)</h4>
+                </div>
+                <div class="link-target-badge" id="editorLinkWorkBadge">★ 작업 대상 인터페이스</div>
+              </div>
+
+              <div class="editor-body">
+                <div class="input-row">
+                  <div class="form-group">
+                    <label for="linkSelectDropdown">설정할 연결 인터페이스 구간 선택</label>
+                    <select id="linkSelectDropdown">
+                      <!-- Dynamically populated -->
+                    </select>
+                    <span class="field-hint">토폴로지 상의 선(링크)이나 라벨을 클릭해도 바로 선택됩니다.</span>
+                  </div>
+
+                  <div class="form-group">
+                    <label for="editLinkState">STP 포트 상태 강제/지정</label>
+                    <select id="editLinkState">
+                      <option value="fwd">Forwarding (FWD) - 정상 트래픽 전송 링크</option>
+                      <option value="blk" selected>Blocking / Discarding (BLK) - 대기 차단 링크</option>
+                    </select>
+                    <span class="field-hint">차단(BLK) 링크를 FWD로 전이하거나 작업 시 위험도를 계산합니다.</span>
+                  </div>
+                </div>
+
+                <div class="input-row">
+                  <div class="form-group">
+                    <label for="editPortCost">인터페이스 Path Cost (경로 비용)</label>
+                    <div class="cost-input-wrap">
+                      <input type="number" id="editPortCost" value="4" min="1" max="200000000">
+                      <select id="presetPortCost">
+                        <option value="">표준 속도プリ셋...</option>
+                        <option value="200000000">10 Mbps (Cost 2,000,000 / Short 100)</option>
+                        <option value="20000">100 Mbps (Cost 200,000 / Short 19)</option>
+                        <option value="4" selected>1 Gbps (Cost 20,000 / Short 4)</option>
+                        <option value="2">10 Gbps (Cost 2,000 / Short 2)</option>
+                        <option value="1">40G / 100G (Cost 1)</option>
+                      </select>
+                    </div>
+                    <span class="field-hint">Cost가 낮을수록 Root로 향하는 최단/우선 포트가 됩니다.</span>
+                  </div>
+
+                  <div class="form-group">
+                    <label for="editPortPriority">Port Priority (16단위, 0~240)</label>
+                    <select id="editPortPriority">
+                      <option value="64">64 (높은 우선순위)</option>
+                      <option value="128" selected>128 (기본 표준값)</option>
+                      <option value="192">192 (낮은 우선순위)</option>
+                    </select>
+                    <span class="field-hint">Cost가 같을 때 대기 포트 선정 기준(낮을수록 FWD 우선).</span>
+                  </div>
+                </div>
+
+                <div class="link-quick-actions">
+                  <button type="button" class="btn-link-action" id="btnSetAsWorkTarget">★ 이 인터페이스를 작업 대상으로 지정</button>
+                  <button type="button" class="btn-link-action btn-toggle-state" id="btnToggleLinkState">⇄ FWD ↔ BLK 상태 전환</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- L2 / STP Global Protocol Setup -->
+            <div class="input-row" style="margin-top: 14px;">
+              <div class="form-group">
+                <label for="stpMode">스위치 STP 동작 모드</label>
+                <select id="stpMode" name="stpMode">
+                  <option value="rapid_pvst" selected>Rapid-PVST+ (Cisco PVRST, 빠른 수렴 1~3s)</option>
+                  <option value="pvst">PVST+ (VLAN마다 독립 STP 계산, 수렴 느림 30~50s)</option>
+                  <option value="mstp">MSTP (802.1s, 인스턴스 기반 매핑)</option>
+                  <option value="rstp">RSTP (802.1w 단일 트리)</option>
+                  <option value="stp">Classic STP (802.1D 레거시, 수렴 30~50s)</option>
+                  <option value="none">STP 비활성화 (No Spanning-Tree - 극단적 위험)</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="workWindow">작업 시간대</label>
+                <select id="workWindow">
+                  <option value="maintenance" selected>야간/주말 정기 점검 창 (유지보수 시간)</option>
+                  <option value="business">정규 업무 시간 (장애 발생 시 전사 영향도 극대화)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- 보안 보호 메커니즘 및 작업자 실수 요인 -->
+          <div class="form-section">
+            <h3 class="section-title">3. 포트 보호 기능 & 작업 방식 (실수 방지책)</h3>
+            <div class="checkbox-grid">
+              <label class="check-container">
+                <input type="checkbox" id="guardBpdu">
+                <span class="checkmark"></span>
+                <span class="check-label">
+                  <strong>BPDU Guard 활성화</strong>
+                  <small>예기치 않은 BPDU 유입 시 포트 자동 shutdown (Err-disable)</small>
+                </span>
+              </label>
+
+              <label class="check-container">
+                <input type="checkbox" id="guardRoot">
+                <span class="checkmark"></span>
+                <span class="check-label">
+                  <strong>Root Guard 활성화</strong>
+                  <small>하위 장비가 Superior BPDU로 루트 탈취 방지</small>
+                </span>
+              </label>
+
+              <label class="check-container">
+                <input type="checkbox" id="guardLoop">
+                <span class="checkmark"></span>
+                <span class="check-label">
+                  <strong>Loop Guard / UDLD 활성화</strong>
+                  <small>단방향 링크 장애 및 BLK 포트의 무단 FWD 전이 방지</small>
+                </span>
+              </label>
+
+              <label class="check-container">
+                <input type="checkbox" id="portfast">
+                <span class="checkmark"></span>
+                <span class="check-label">
+                  <strong>PortFast / Edge Port 설정됨</strong>
+                  <small>리스닝/러닝 생략 즉시 FWD (트렁크 설정 시 위험)</small>
+                </span>
+              </label>
+
+              <label class="check-container danger-check">
+                <input type="checkbox" id="switchportAllowedAll">
+                <span class="checkmark"></span>
+                <span class="check-label">
+                  <strong>'switchport trunk allowed vlan add' 대신 누락 실수 위험</strong>
+                  <small>'vlan 100' 처럼 덮어쓰기 명령어를 사용할 가능성 (기존 VLAN 일괄 단절)</small>
+                </span>
+              </label>
+
+              <label class="check-container">
+                <input type="checkbox" id="hasNativeVlanMismatch">
+                <span class="checkmark"></span>
+                <span class="check-label">
+                  <strong>상대편 스위치와 Native VLAN 불일치 의심</strong>
+                  <small>VLAN Leaking 및 STP PVID 불일치로 인한 차단 가능성</small>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <!-- 실시간 트래픽 및 운영 환경 -->
+          <div class="form-section">
+            <h3 class="section-title">4. 트래픽 환경 및 VLAN 규모</h3>
+            <div class="input-row">
+              <div class="form-group">
+                <label for="vlanCountTotal">스위치 내 활성 VLAN 총 수량</label>
+                <input type="number" id="vlanCountTotal" value="35" min="1" max="4094">
+                <span class="field-hint">PVST의 경우 VLAN 수에 비례하여 CPU BPDU 처리 급증</span>
+              </div>
+              <div class="form-group">
+                <label for="broadcastRate">평상시 브로드캐스트/멀티캐스트 유입량</label>
+                <select id="broadcastRate">
+                  <option value="normal" selected>보통 (일반 오피스 / 표준 서버팜 &lt; 5%)</option>
+                  <option value="high">높음 (CCTV 영상 스트리밍 / 멀티캐스트 &gt; 15%)</option>
+                  <option value="extreme">극단적 (대용량 금융 트레이딩 / SAN iSCSI)</option>
+                </select>
+                <span class="field-hint">루프 형성 시 스톰 증폭 속도에 결정적 영향</span>
+              </div>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <!-- Analysis & Result Dashboard Panel -->
+      <section class="panel result-panel">
+        <div class="panel-header">
+          <h2>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+            </svg>
+            위험도 및 장애 발생 예측 분석표
+          </h2>
+          <button type="button" id="btnExport" class="btn-outline">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            결과 복사 / 보고서 복사
+          </button>
+        </div>
+
+        <div class="result-body">
+          <!-- Main Risk Gauge Card -->
+          <div class="score-card" id="scoreCard">
+            <div class="score-gauge-wrapper">
+              <div class="gauge-dial">
+                <svg viewBox="0 0 160 160" class="gauge-svg">
+                  <circle class="gauge-bg" cx="80" cy="80" r="68"></circle>
+                  <circle class="gauge-fill" id="gaugeCircle" cx="80" cy="80" r="68"></circle>
+                </svg>
+                <div class="gauge-value-text">
+                  <span id="riskScore">0</span>
+                  <small>/ 100</small>
+                </div>
+              </div>
+            </div>
+            <div class="score-summary">
+              <div class="risk-level-badge" id="riskBadge">분석 중...</div>
+              <h3 id="riskSummaryTitle">위험도 진단</h3>
+              <p id="riskSummaryDesc" class="risk-desc-text">옵션을 선택하면 실시간으로 위험 지수가 계산됩니다.</p>
+            </div>
+          </div>
+
+          <!-- Secondary Metric Counters -->
+          <div class="metric-grid">
+            <div class="metric-card">
+              <span class="metric-title">STP Loop / 폭주 확률</span>
+              <span class="metric-val danger-text" id="loopProb">0%</span>
+              <span class="metric-sub" id="loopProbDetail">브로드캐스트 스톰 발생 확률</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">예상 서비스 일시 중단 시간</span>
+              <span class="metric-val warn-text" id="flapDuration">0초</span>
+              <span class="metric-sub" id="flapDurationDetail">TCN 및 STP 재수렴 소요</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">TCN 브로드캐스트 전파 반경</span>
+              <span class="metric-val info-text" id="tcnImpact">동일 VLAN</span>
+              <span class="metric-sub" id="tcnImpactDetail">MAC Flapping 영향 범위</span>
+            </div>
+          </div>
+
+          <!-- Detailed Simulation Predictions -->
+          <div class="report-box">
+            <h4 class="report-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+              핵심 장애 시나리오 및 시뮬레이션 진단
+            </h4>
+            <ul class="scenario-list" id="scenarioList">
+              <!-- Dynamically Populated -->
+            </ul>
+          </div>
+
+          <!-- Recommended Safety Checklist & Commands -->
+          <div class="report-box safety-box">
+            <h4 class="report-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              </svg>
+              네트워크 엔지니어 필수 사전 점검 & 방어 가이드
+            </h4>
+            <div class="checklist-items" id="checklistItems">
+              <!-- Dynamically Populated -->
+            </div>
+          </div>
+
+          <!-- CLI Command Reference Box -->
+          <div class="report-box cli-box">
+            <div class="cli-box-header">
+              <h4 class="report-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="4 17 10 11 4 5"></polyline>
+                  <line x1="12" y1="19" x2="20" y2="19"></line>
+                </svg>
+                권장 안전 CLI 명령어 (Cisco / 표준 기준)
+              </h4>
+              <button type="button" class="btn-cli-copy" id="btnCopyCli">명령어 복사</button>
+            </div>
+            <pre class="cli-code-block"><code id="cliSnippet">-- 작업 파라미터에 따라 자동 생성됩니다 --</code></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>L2 Spanning Tree & VLAN Change Impact Risk Calculator | Standalone WebApp (No Server Required, Client-side Pure JS)</p>
+    </footer>
+  </div>
+
+  <div id="toast" class="toast">클립보드에 복사되었습니다.</div>
+  <script src="script.js"></script>
+</body>
+</html>
